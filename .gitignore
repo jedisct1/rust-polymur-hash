@@ -1,3 +1,4 @@
 /target
 *~
 zig-cache
+Cargo.lock

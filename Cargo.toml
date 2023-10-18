@@ -1,0 +1,28 @@
+[package]
+name = "polymur-hash"
+version = "0.1.0"
+edition = "2021"
+authors = ["Frank Denis <github@pureftpd.org>"]
+description = "Polymur hash function"
+keywords = ["hash", "polymur"]
+license = "MIT"
+homepage = "https://github.com/jedisct1/rust-polymur-hash"
+repository = "https://github.com/jedisct1/rust-polymur-hash"
+readme = "README.md"
+categories = ["no-std", "hashing"]
+
+[[bench]]
+name = "benchmark"
+harness = false
+
+[dependencies]
+
+[dev-dependencies]
+benchmark-simple = "0.1.8"
+fnv = "1.0.7"
+fxhash = "0.2.1"
+
+[profile.release]
+codegen-units = 1
+incremental = false
+panic = "abort"
