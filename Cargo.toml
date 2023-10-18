@@ -21,6 +21,7 @@ harness = false
 benchmark-simple = "0.1.8"
 fnv = "1.0.7"
 fxhash = "0.2.1"
+xxhash-rust = { version = "0.8.7", features = ["xxh3"] }
 
 [profile.release]
 codegen-units = 1
