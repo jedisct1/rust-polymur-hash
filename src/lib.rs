@@ -1,3 +1,6 @@
+#![cfg_attr(not(test), no_std)]
+#![forbid(unsafe_code)]
+
 pub struct PolymurHash {
     k: u64,
     k2: u64,
