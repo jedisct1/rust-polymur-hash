@@ -13,8 +13,8 @@ impl PolymurHash {
     }
 
     pub fn from_u64_seed(seed: u64) -> Self {
-        let k_seed = Self::mix(seed + POLYMUR_ARBITRARY3);
-        let s_seed = Self::mix(seed + POLYMUR_ARBITRARY4);
+        let k_seed = Self::mix(seed.wrapping_add(POLYMUR_ARBITRARY3));
+        let s_seed = Self::mix(seed.wrapping_add(POLYMUR_ARBITRARY4));
         Self::from_u64x2_seed(k_seed, s_seed)
     }
 
@@ -207,4 +207,41 @@ fn le_u64_0_8(buf: &[u8]) -> u64 {
     let hi = u32::from_le_bytes(tmp) as u64;
 
     lo | (hi << (8 * (len - 4)))
+}
+
+#[test]
+fn test() {
+    let mut t = 0;
+
+    for i in 0..1000 {
+        let hasher = PolymurHash::new(i as u128 * 0x419a02900419a02900419a02900419);
+        let mut size = 1;
+        loop {
+            let mut m = vec![0u8; size];
+            m.iter_mut().for_each(|x| *x = i as u8);
+            let res = hasher.hash(&m);
+            t += res as u128;
+            debug_assert!(t != 0);
+            if size >= 65536 {
+                break;
+            }
+            size *= 2;
+        }
+
+        let hasher = PolymurHash::from_u64_seed(i * 0x419a02900419a0);
+        let mut size = 1;
+        loop {
+            let mut m = vec![0u8; size];
+            m.iter_mut().for_each(|x| *x = i as u8);
+            let res = hasher.hash(&m);
+            t += res as u128;
+            debug_assert!(t != 0);
+            if size >= 65536 {
+                break;
+            }
+            size *= 3;
+        }
+    }
+
+    assert_eq!(t, 0x38e2c3f5e905d22cf8d4);
 }
