@@ -2,6 +2,46 @@
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 
+extern crate alloc;
+
+use alloc::vec::Vec;
+use core::hash::Hasher;
+
+/// A fast, non-cryptographic hash function based on polynomial evaluation.
+///
+/// PolymurHash is a universal hash function that provides excellent performance
+/// and good distribution properties. It's particularly well-suited for hash tables
+/// and other non-cryptographic applications.
+///
+/// # Examples
+///
+/// Basic usage:
+/// ```
+/// use polymur_hash::PolymurHash;
+///
+/// let hasher = PolymurHash::new(0);
+/// let data = b"Hello, world!";
+/// let hash = hasher.hash(data);
+/// ```
+///
+/// Using with a custom seed:
+/// ```
+/// use polymur_hash::PolymurHash;
+///
+/// let seed = 0xDEADBEEFCAFEBABE_u64;
+/// let hasher = PolymurHash::from_u64_seed(seed);
+/// let hash = hasher.hash(b"Some data");
+/// ```
+///
+/// Hash with tweak for additional randomization:
+/// ```
+/// use polymur_hash::PolymurHash;
+///
+/// let hasher = PolymurHash::new(42);
+/// let tweak = 0x123456789ABCDEF0;
+/// let hash = hasher.hash_with_tweak(b"Data", tweak);
+/// ```
+#[derive(Clone, Debug)]
 pub struct PolymurHash {
     k: u64,
     k2: u64,
@@ -10,18 +50,62 @@ pub struct PolymurHash {
 }
 
 impl PolymurHash {
+    /// Creates a new PolymurHash instance from a 128-bit seed.
+    ///
+    /// # Arguments
+    ///
+    /// * `seed` - A 128-bit seed value to initialize the hasher
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use polymur_hash::PolymurHash;
+    ///
+    /// let hasher = PolymurHash::new(0x123456789ABCDEF0123456789ABCDEF0);
+    /// ```
     pub fn new(seed: u128) -> Self {
         let k_seed = seed as u64;
         let s_seed = (seed >> 64) as u64;
         Self::from_u64x2_seed(k_seed, s_seed)
     }
 
+    /// Creates a new PolymurHash instance from a 64-bit seed.
+    ///
+    /// This method expands the 64-bit seed into the required internal state.
+    ///
+    /// # Arguments
+    ///
+    /// * `seed` - A 64-bit seed value to initialize the hasher
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use polymur_hash::PolymurHash;
+    ///
+    /// let hasher = PolymurHash::from_u64_seed(0xDEADBEEF);
+    /// ```
     pub fn from_u64_seed(seed: u64) -> Self {
         let k_seed = Self::mix(seed.wrapping_add(POLYMUR_ARBITRARY3));
         let s_seed = Self::mix(seed.wrapping_add(POLYMUR_ARBITRARY4));
         Self::from_u64x2_seed(k_seed, s_seed)
     }
 
+    /// Creates a new PolymurHash instance from two 64-bit seeds.
+    ///
+    /// This provides direct control over the key and state seeds.
+    ///
+    /// # Arguments
+    ///
+    /// * `k_seed` - Seed for the polynomial key generation
+    /// * `s_seed` - Seed for the final mixing state
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use polymur_hash::PolymurHash;
+    ///
+    /// let hasher = PolymurHash::from_u64x2_seed(0x12345678, 0x9ABCDEF0);
+    /// ```
     pub fn from_u64x2_seed(mut k_seed: u64, s_seed: u64) -> Self {
         let s = s_seed ^ POLYMUR_ARBITRARY1;
         let mut pow37 = [0u64; 64];
@@ -64,11 +148,51 @@ impl PolymurHash {
         }
     }
 
+    /// Computes the hash of the given data with an additional tweak value.
+    ///
+    /// The tweak allows for additional randomization without changing the key.
+    /// This is useful for applications that need multiple independent hash values
+    /// from the same key.
+    ///
+    /// # Arguments
+    ///
+    /// * `buf` - The data to hash
+    /// * `tweak` - An additional value to mix into the hash
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use polymur_hash::PolymurHash;
+    ///
+    /// let hasher = PolymurHash::new(0);
+    /// let data = b"Hello, world!";
+    /// let hash1 = hasher.hash_with_tweak(data, 1);
+    /// let hash2 = hasher.hash_with_tweak(data, 2);
+    /// assert_ne!(hash1, hash2); // Different tweaks produce different hashes
+    /// ```
     pub fn hash_with_tweak(&self, buf: impl AsRef<[u8]>, tweak: u64) -> u64 {
         let h = self.poly1611(buf, tweak);
         Self::mix(h).wrapping_add(self.s)
     }
 
+    /// Computes the hash of the given data.
+    ///
+    /// # Arguments
+    ///
+    /// * `buf` - The data to hash
+    ///
+    /// # Returns
+    ///
+    /// A 64-bit hash value
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use polymur_hash::PolymurHash;
+    ///
+    /// let hasher = PolymurHash::new(0);
+    /// let hash = hasher.hash(b"Hello, world!");
+    /// ```
     pub fn hash(&self, buf: impl AsRef<[u8]>) -> u64 {
         let h = self.poly1611(buf, 0);
         Self::mix(h).wrapping_add(self.s)
@@ -168,6 +292,109 @@ const POLYMUR_ARBITRARY2: u64 = 0xbb67ae8584caa73b;
 const POLYMUR_ARBITRARY3: u64 = 0x3c6ef372fe94f82b;
 const POLYMUR_ARBITRARY4: u64 = 0xa54ff53a5f1d36f1;
 
+/// A hasher that implements the core library's `Hasher` trait.
+///
+/// This allows PolymurHash to be used with HashMap and HashSet, even in no_std environments
+/// (requires `alloc` for the internal buffer).
+///
+/// # Examples
+///
+/// Using with HashMap:
+/// ```
+/// # #[cfg(feature = "std")] {
+/// use std::collections::HashMap;
+/// use std::hash::BuildHasherDefault;
+/// use polymur_hash::PolymurHasher;
+///
+/// type PolymurHashMap<K, V> = HashMap<K, V, BuildHasherDefault<PolymurHasher>>;
+///
+/// let mut map: PolymurHashMap<String, i32> = PolymurHashMap::default();
+/// map.insert("hello".to_string(), 42);
+/// # }
+/// ```
+#[derive(Clone, Debug)]
+pub struct PolymurHasher {
+    hasher: PolymurHash,
+    buffer: Vec<u8>,
+}
+
+impl Default for PolymurHasher {
+    fn default() -> Self {
+        Self {
+            hasher: PolymurHash::new(0),
+            buffer: Vec::new(),
+        }
+    }
+}
+
+impl PolymurHasher {
+    /// Creates a new PolymurHasher with a specific seed.
+    pub fn with_seed(seed: u128) -> Self {
+        Self {
+            hasher: PolymurHash::new(seed),
+            buffer: Vec::new(),
+        }
+    }
+}
+
+impl Hasher for PolymurHasher {
+    fn finish(&self) -> u64 {
+        self.hasher.hash(&self.buffer)
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        self.buffer.extend_from_slice(bytes);
+    }
+
+    fn write_u8(&mut self, i: u8) {
+        self.buffer.push(i);
+    }
+
+    fn write_u16(&mut self, i: u16) {
+        self.buffer.extend_from_slice(&i.to_le_bytes());
+    }
+
+    fn write_u32(&mut self, i: u32) {
+        self.buffer.extend_from_slice(&i.to_le_bytes());
+    }
+
+    fn write_u64(&mut self, i: u64) {
+        self.buffer.extend_from_slice(&i.to_le_bytes());
+    }
+
+    fn write_u128(&mut self, i: u128) {
+        self.buffer.extend_from_slice(&i.to_le_bytes());
+    }
+
+    fn write_usize(&mut self, i: usize) {
+        self.buffer.extend_from_slice(&i.to_le_bytes());
+    }
+
+    fn write_i8(&mut self, i: i8) {
+        self.write_u8(i as u8);
+    }
+
+    fn write_i16(&mut self, i: i16) {
+        self.write_u16(i as u16);
+    }
+
+    fn write_i32(&mut self, i: i32) {
+        self.write_u32(i as u32);
+    }
+
+    fn write_i64(&mut self, i: i64) {
+        self.write_u64(i as u64);
+    }
+
+    fn write_i128(&mut self, i: i128) {
+        self.write_u128(i as u128);
+    }
+
+    fn write_isize(&mut self, i: isize) {
+        self.write_usize(i as usize);
+    }
+}
+
 #[inline(always)]
 fn mul128(a: u64, b: u64) -> u128 {
     (a as u128) * (b as u128)
@@ -208,6 +435,118 @@ fn le_u64_0_8(buf: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_edge_cases() {
+        let hasher = PolymurHash::new(0);
+
+        // Empty input
+        assert_eq!(hasher.hash(b""), hasher.hash([]));
+
+        // Single byte
+        assert_ne!(hasher.hash(b"a"), hasher.hash(b"b"));
+
+        // Same data with different seeds produces different hashes
+        let hasher2 = PolymurHash::new(0xDEADBEEFCAFEBABE);
+        assert_ne!(hasher.hash(b"test"), hasher2.hash(b"test"));
+
+        // Verify tweaks work correctly
+        let data = b"test data";
+        assert_ne!(
+            hasher.hash_with_tweak(data, 0),
+            hasher.hash_with_tweak(data, 1)
+        );
+        assert_eq!(hasher.hash(data), hasher.hash_with_tweak(data, 0));
+    }
+
+    #[test]
+    fn test_different_lengths() {
+        let hasher = PolymurHash::new(42);
+
+        // Test various lengths to hit different code paths
+        let lengths = [
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 15, 16, 31, 32, 48, 49, 50, 63, 64, 127, 128, 255, 256,
+            1023, 1024,
+        ];
+
+        for &len in &lengths {
+            let data = vec![0xABu8; len];
+            let hash = hasher.hash(&data);
+
+            // Verify that changing any byte changes the hash
+            if len > 0 {
+                let mut modified = data.clone();
+                modified[len / 2] = 0xCD;
+                assert_ne!(
+                    hash,
+                    hasher.hash(&modified),
+                    "Hash collision at length {}",
+                    len
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_seed_variants() {
+        let data = b"test data for seed variants";
+
+        // Test that different seed creation methods with same values produce same results
+        let seed_high = 0x123456789ABCDEF0_u64;
+        let seed_low = 0x0123456789ABCDEF0_u64;
+        let seed_128 = ((seed_high as u128) << 64) | (seed_low as u128);
+        let h1 = PolymurHash::new(seed_128);
+        let h2 = PolymurHash::from_u64x2_seed(seed_low, seed_high);
+
+        // These should produce the same hash since they use the same seed values
+        assert_eq!(h1.hash(data), h2.hash(data));
+
+        // Different seeds should produce different hashes
+        let h3 = PolymurHash::from_u64_seed(0x123456789ABCDEF0);
+        assert_ne!(h1.hash(data), h3.hash(data));
+    }
+
+    #[test]
+    fn test_hasher_trait() {
+        use core::hash::{Hash, Hasher as _};
+
+        let mut hasher1 = PolymurHasher::default();
+        let mut hasher2 = PolymurHasher::default();
+
+        // Hash the same string using the Hash trait
+        "Hello, world!".hash(&mut hasher1);
+        "Hello, world!".hash(&mut hasher2);
+
+        assert_eq!(hasher1.finish(), hasher2.finish());
+
+        // Test integer hashing
+        let mut hasher3 = PolymurHasher::default();
+        let mut hasher4 = PolymurHasher::default();
+
+        42u32.hash(&mut hasher3);
+        hasher4.write_u32(42);
+
+        assert_eq!(hasher3.finish(), hasher4.finish());
+    }
+
+    #[test]
+    fn test_hashmap_integration() {
+        use core::hash::BuildHasherDefault;
+        use std::collections::HashMap;
+
+        type PolymurHashMap<K, V> = HashMap<K, V, BuildHasherDefault<PolymurHasher>>;
+
+        let mut map: PolymurHashMap<String, i32> = PolymurHashMap::default();
+
+        map.insert("foo".to_string(), 42);
+        map.insert("bar".to_string(), 123);
+        map.insert("baz".to_string(), 456);
+
+        assert_eq!(map.get("foo"), Some(&42));
+        assert_eq!(map.get("bar"), Some(&123));
+        assert_eq!(map.get("baz"), Some(&456));
+        assert_eq!(map.get("qux"), None);
+    }
 
     #[test]
     fn test() {
