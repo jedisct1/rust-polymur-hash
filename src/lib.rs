@@ -45,7 +45,12 @@ use core::hash::Hasher;
 pub struct PolymurHash {
     k: u64,
     k2: u64,
+    k3: u64,
+    k4: u64,
+    k5: u64,
+    k6: u64,
     k7: u64,
+    k14: u64,
     s: u64,
 }
 
@@ -121,7 +126,7 @@ impl PolymurHash {
             let mut e = (k_seed >> 3) | 1;
             const PRIMES: [u64; 11] = [3, 5, 7, 11, 13, 31, 41, 61, 151, 331, 1321];
             for &p in PRIMES.iter() {
-                if (e % p) == 0 {
+                if e.is_multiple_of(p) {
                     continue 'retry;
                 }
             }
@@ -143,7 +148,20 @@ impl PolymurHash {
             let k4 = red611(mul128(k2, k2));
             let k7 = extrared611(red611(mul128(k3, k4)));
             if k7 < (1_u64 << 60) - (1_u64 << 56) {
-                return Self { k, k2, k7, s };
+                let k5 = extrared611(red611(mul128(k, k4)));
+                let k6 = extrared611(red611(mul128(k2, k4)));
+                let k14 = red611(mul128(k7, k7));
+                return Self {
+                    k,
+                    k2,
+                    k3,
+                    k4,
+                    k5,
+                    k6,
+                    k7,
+                    k14,
+                    s,
+                };
             }
         }
     }
@@ -170,6 +188,7 @@ impl PolymurHash {
     /// let hash2 = hasher.hash_with_tweak(data, 2);
     /// assert_ne!(hash1, hash2); // Different tweaks produce different hashes
     /// ```
+    #[inline(always)]
     pub fn hash_with_tweak(&self, buf: impl AsRef<[u8]>, tweak: u64) -> u64 {
         let h = self.poly1611(buf, tweak);
         Self::mix(h).wrapping_add(self.s)
@@ -193,85 +212,130 @@ impl PolymurHash {
     /// let hasher = PolymurHash::new(0);
     /// let hash = hasher.hash(b"Hello, world!");
     /// ```
+    #[inline(always)]
     pub fn hash(&self, buf: impl AsRef<[u8]>) -> u64 {
         let h = self.poly1611(buf, 0);
         Self::mix(h).wrapping_add(self.s)
     }
 
+    #[inline(always)]
     fn poly1611(&self, buf: impl AsRef<[u8]>, tweak: u64) -> u64 {
         let mut buf = buf.as_ref();
-        let mut m = [0u64; 7];
         let mut poly_acc = tweak;
         if buf.len() <= 7 {
-            m[0] = le_u64_0_8(buf);
+            let m0 = le_u64_0_8(buf);
             return poly_acc.wrapping_add(red611(mul128(
-                self.k.wrapping_add(m[0]),
+                self.k.wrapping_add(m0),
                 self.k2.wrapping_add(buf.len() as u64),
             )));
         }
 
-        let k3 = red611(mul128(self.k, self.k2));
-        let k4 = red611(mul128(self.k2, self.k2));
-        if buf.len() >= 50 {
-            let k5 = extrared611(red611(mul128(self.k, k4)));
-            let k6 = extrared611(red611(mul128(self.k2, k4)));
-            let k3 = extrared611(k3);
-            let k4 = extrared611(k4);
-            let mut h: u64 = 0;
-            loop {
-                for i in 0..7 {
-                    let mut tmp = [0u8; 8];
-                    tmp.copy_from_slice(&buf[7 * i..][..8]);
-                    m[i] = u64::from_le_bytes(tmp) & 0x00ffffffffffffff;
-                }
-                let t0 = mul128(self.k + m[0], k6 + m[1]);
-                let t1 = mul128(self.k2 + m[2], k5 + m[3]);
-                let t2 = mul128(k3 + m[4], k4 + m[5]);
-                let t3 = mul128(h + m[6], self.k7);
-                let s = t0.wrapping_add(t1).wrapping_add(t2).wrapping_add(t3);
-                h = red611(s);
-                buf = &buf[49..];
-                if buf.len() < 50 {
-                    break;
-                }
-            }
-            let k14 = red611(mul128(self.k7, self.k7));
-            let hk14 = red611(mul128(extrared611(h), k14));
-            poly_acc += extrared611(hk14);
+        let k = self.k;
+        let k2 = self.k2;
+        let k3 = self.k3;
+        let k4 = self.k4;
+        let k7 = self.k7;
+        if buf.len() < 50 {
+            return Self::poly_tail(buf, poly_acc, k, k2, k3, k4, k7);
         }
 
+        let k3_long = extrared611(k3);
+        let k4_long = extrared611(k4);
+        let k5 = self.k5;
+        let k6 = self.k6;
+        let k14 = self.k14;
+        let mut h: u64 = 0;
+        let mut m = [0u64; 7];
+        loop {
+            let mut tmp = [0u8; 8];
+            for i in 0..7 {
+                tmp.copy_from_slice(&buf[7 * i..][..8]);
+                m[i] = u64::from_le_bytes(tmp) & 0x00ffffffffffffff;
+            }
+            let t0 = mul128(k + m[0], k6 + m[1]);
+            let t1 = mul128(k2 + m[2], k5 + m[3]);
+            let t2 = mul128(k3_long + m[4], k4_long + m[5]);
+            let t3 = mul128(h + m[6], k7);
+            let s = t0.wrapping_add(t1).wrapping_add(t2).wrapping_add(t3);
+            h = red611(s);
+            buf = &buf[49..];
+            if buf.len() < 50 {
+                break;
+            }
+        }
+        let hk14 = red611(mul128(extrared611(h), k14));
+        poly_acc += extrared611(hk14);
         if buf.len() >= 8 {
+            let len = buf.len();
             let mut tmp = [0u8; 8];
             tmp.copy_from_slice(&buf[..8]);
             m[0] = u64::from_le_bytes(tmp) & 0x00ffffffffffffff;
-            tmp.copy_from_slice(&buf[(buf.len() - 7) / 2..][0..8]);
+            tmp.copy_from_slice(&buf[(len - 7) / 2..][..8]);
             m[1] = u64::from_le_bytes(tmp) & 0x00ffffffffffffff;
-            tmp.copy_from_slice(&buf[buf.len() - 8..][0..8]);
+            tmp.copy_from_slice(&buf[len - 8..][..8]);
             m[2] = u64::from_le_bytes(tmp) >> 8;
-            let t0 = mul128(self.k2 + m[0], self.k7.wrapping_add(m[1]));
-            let t1 = mul128(self.k + m[2], k3.wrapping_add(buf.len() as _));
-            if buf.len() <= 21 {
+            let t0 = mul128(k2 + m[0], k7.wrapping_add(m[1]));
+            let t1 = mul128(k + m[2], k3.wrapping_add(len as _));
+            if len <= 21 {
                 return poly_acc + red611(t0.wrapping_add(t1));
             }
-            tmp.copy_from_slice(&buf[7..][0..8]);
+            tmp.copy_from_slice(&buf[7..][..8]);
             m[3] = u64::from_le_bytes(tmp) & 0x00ffffffffffffff;
-            tmp.copy_from_slice(&buf[14..][0..8]);
+            tmp.copy_from_slice(&buf[14..][..8]);
             m[4] = u64::from_le_bytes(tmp) & 0x00ffffffffffffff;
-            tmp.copy_from_slice(&buf[buf.len() - 21..][0..8]);
+            tmp.copy_from_slice(&buf[len - 21..][..8]);
             m[5] = u64::from_le_bytes(tmp) & 0x00ffffffffffffff;
-            tmp.copy_from_slice(&buf[buf.len() - 14..][0..8]);
+            tmp.copy_from_slice(&buf[len - 14..][..8]);
             m[6] = u64::from_le_bytes(tmp) & 0x00ffffffffffffff;
             let t0r = red611(t0);
-            let t2 = mul128(self.k2 + m[3], self.k7 + m[4]);
+            let t2 = mul128(k2 + m[3], k7 + m[4]);
             let t3 = mul128(t0r + m[5], k4 + m[6]);
             let s = t1.wrapping_add(t2).wrapping_add(t3);
             return poly_acc.wrapping_add(red611(s));
         }
 
-        m[0] = le_u64_0_8(buf);
+        let m0 = le_u64_0_8(buf);
         poly_acc.wrapping_add(red611(mul128(
-            self.k.wrapping_add(m[0]),
-            self.k2.wrapping_add(buf.len() as _),
+            k.wrapping_add(m0),
+            k2.wrapping_add(buf.len() as _),
+        )))
+    }
+
+    #[inline(always)]
+    fn poly_tail(buf: &[u8], poly_acc: u64, k: u64, k2: u64, k3: u64, k4: u64, k7: u64) -> u64 {
+        if buf.len() >= 8 {
+            let len = buf.len();
+            let mut tmp = [0u8; 8];
+            tmp.copy_from_slice(&buf[..8]);
+            let m0 = u64::from_le_bytes(tmp) & 0x00ffffffffffffff;
+            tmp.copy_from_slice(&buf[(len - 7) / 2..][..8]);
+            let m1 = u64::from_le_bytes(tmp) & 0x00ffffffffffffff;
+            tmp.copy_from_slice(&buf[len - 8..][..8]);
+            let m2 = u64::from_le_bytes(tmp) >> 8;
+            let t0 = mul128(k2 + m0, k7.wrapping_add(m1));
+            let t1 = mul128(k + m2, k3.wrapping_add(len as _));
+            if len <= 21 {
+                return poly_acc + red611(t0.wrapping_add(t1));
+            }
+            tmp.copy_from_slice(&buf[7..][..8]);
+            let m3 = u64::from_le_bytes(tmp) & 0x00ffffffffffffff;
+            tmp.copy_from_slice(&buf[14..][..8]);
+            let m4 = u64::from_le_bytes(tmp) & 0x00ffffffffffffff;
+            tmp.copy_from_slice(&buf[len - 21..][..8]);
+            let m5 = u64::from_le_bytes(tmp) & 0x00ffffffffffffff;
+            tmp.copy_from_slice(&buf[len - 14..][..8]);
+            let m6 = u64::from_le_bytes(tmp) & 0x00ffffffffffffff;
+            let t0r = red611(t0);
+            let t2 = mul128(k2 + m3, k7 + m4);
+            let t3 = mul128(t0r + m5, k4 + m6);
+            let s = t1.wrapping_add(t2).wrapping_add(t3);
+            return poly_acc.wrapping_add(red611(s));
+        }
+
+        let m0 = le_u64_0_8(buf);
+        poly_acc.wrapping_add(red611(mul128(
+            k.wrapping_add(m0),
+            k2.wrapping_add(buf.len() as _),
         )))
     }
 
@@ -412,24 +476,42 @@ fn extrared611(x: u64) -> u64 {
 
 #[inline(always)]
 fn le_u64_0_8(buf: &[u8]) -> u64 {
-    let len = buf.len();
-    if len < 4 {
-        if len == 0 {
-            return 0;
+    match buf.len() {
+        0 => 0,
+        1 => buf[0] as u64,
+        2 => (buf[0] as u64) | ((buf[1] as u64) << 8),
+        3 => (buf[0] as u64) | ((buf[1] as u64) << 8) | ((buf[2] as u64) << 16),
+        4 => {
+            (buf[0] as u64)
+                | ((buf[1] as u64) << 8)
+                | ((buf[2] as u64) << 16)
+                | ((buf[3] as u64) << 24)
         }
-        let mut v = buf[0] as u64;
-        v |= (buf[len / 2] as u64) << (8 * (len / 2));
-        v |= (buf[len - 1] as u64) << (8 * (len - 1));
-        return v;
+        5 => {
+            (buf[0] as u64)
+                | ((buf[1] as u64) << 8)
+                | ((buf[2] as u64) << 16)
+                | ((buf[3] as u64) << 24)
+                | ((buf[4] as u64) << 32)
+        }
+        6 => {
+            (buf[0] as u64)
+                | ((buf[1] as u64) << 8)
+                | ((buf[2] as u64) << 16)
+                | ((buf[3] as u64) << 24)
+                | ((buf[4] as u64) << 32)
+                | ((buf[5] as u64) << 40)
+        }
+        _ => {
+            (buf[0] as u64)
+                | ((buf[1] as u64) << 8)
+                | ((buf[2] as u64) << 16)
+                | ((buf[3] as u64) << 24)
+                | ((buf[4] as u64) << 32)
+                | ((buf[5] as u64) << 40)
+                | ((buf[6] as u64) << 48)
+        }
     }
-
-    let mut tmp = [0u8; 4];
-    tmp.copy_from_slice(&buf[0..4]);
-    let lo = u32::from_le_bytes(tmp) as u64;
-    tmp.copy_from_slice(&buf[len - 4..][..4]);
-    let hi = u32::from_le_bytes(tmp) as u64;
-
-    lo | (hi << (8 * (len - 4)))
 }
 
 #[cfg(test)]
