@@ -1,6 +1,6 @@
 [package]
 name = "polymur-hash"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 authors = ["Frank Denis <github@pureftpd.org>"]
 description = "PolymurHash non-cryptographic 64-bit universal hash function with seeded hashing, Hasher support, and no_std compatibility"
@@ -18,10 +18,10 @@ harness = false
 [dependencies]
 
 [dev-dependencies]
-benchmark-simple = "0.1.10"
+benchmark-simple = "0.1.11"
 fnv = "1.0.7"
 fxhash = "0.2.1"
-xxhash-rust = { version = "0.8.15", features = ["xxh3"] }
+xxhash-rust = { version = "0.8.18", features = ["xxh3"] }
 komihash = "0.4.1"
 
 [profile.release]
